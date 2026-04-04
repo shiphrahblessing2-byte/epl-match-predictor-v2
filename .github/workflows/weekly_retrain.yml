@@ -52,6 +52,10 @@ jobs:
         if: success()
         run: python src/deploy.py
 
+        name: Log predictions + update accuracy
+        if: success()
+        run: python src/log_predictions.py --all
+
       - name: Notify on failure
         if: failure()
         run: |
