@@ -1,3 +1,4 @@
+from src.csv_fallback import get_fixtures_fallback, get_predictions_fallback
 """
 Layer 5 — FastAPI Serving Layer
 Runs on HuggingFace Spaces (port 7860) or locally (port 8000).
@@ -154,14 +155,17 @@ def predict_batch_endpoint(req: BatchRequest):
         raise HTTPException(500, f"Batch prediction failed: {str(e)}")
 
 
+# REPLACE WITH:
 @app.get("/upcoming", tags=["Prediction"])
 def upcoming_predictions():
     """
     Return predictions for the next matchweek.
-    Reads upcoming fixtures from API-Football and runs predictions.
+    Reads upcoming fixtures from Supabase, falls back to CSV if unavailable.
     """
+    fixtures = []
+
+    # Try Supabase first
     try:
-        # Fetch upcoming fixtures from matches table (NS = not started)
         resp = (
             db.table("matches")
             .select("fixture_id,home_team_id,away_team_id,match_date")
@@ -170,11 +174,29 @@ def upcoming_predictions():
             .limit(10)
             .execute()
         )
-        fixtures = resp.data
-        if not fixtures:
-            return {"count": 0, "predictions": [],
-                    "note": "No upcoming fixtures found"}
+        fixtures = resp.data or []
+    except Exception as e:
+        log.warning(f"Supabase unavailable, trying CSV fallback: {e}")
 
+    # Fall back to CSV if Supabase returned nothing
+    if not fixtures:
+        log.info("Loading fixtures from CSV fallback...")
+        raw = get_fixtures_fallback()
+        fixtures = [
+            {
+                "fixture_id": int(r["fixture_id"]),
+                "home_team_id": int(r["home_team_id"]),
+                "away_team_id": int(r["away_team_id"]),
+                "match_date": r["match_date"],
+            }
+            for r in raw
+        ]
+
+    if not fixtures:
+        return {"count": 0, "predictions": [],
+                "note": "No upcoming fixtures found"}
+
+    try:
         predictions = []
         for fix in fixtures:
             pred = predict_match(
@@ -188,7 +210,7 @@ def upcoming_predictions():
 
         return {"count": len(predictions), "predictions": predictions}
     except Exception as e:
-        log.error(f"Upcoming predictions error: {e}")
+        log.error(f"Prediction error: {e}")
         raise HTTPException(500, str(e))
 
 
@@ -198,15 +220,24 @@ def rolling_accuracy():
     Return rolling accuracy over the last 10 predictions
     where actual result is known.
     """
+    # REPLACE WITH:
     try:
-        resp = (
-            db.table("predictions")
-            .select("predicted,actual,correct")
-            .order("predicted_at", desc=True)
-            .limit(10)
-            .execute()
-        )
-        rows = resp.data
+        rows = []
+        try:
+            resp = (
+                db.table("predictions")
+                .select("predicted,actual,correct")
+                .order("predicted_at", desc=True)
+                .limit(10)
+                .execute()
+            )
+            rows = resp.data or []
+        except Exception as db_err:
+            log.warning(f"Supabase unavailable for accuracy, using CSV: {db_err}")
+            raw = get_predictions_fallback()
+            rows = [{"predicted": r.get("predicted"), "actual": r.get("actual"),
+                     "correct": r.get("correct")} for r in raw]
+
         if not rows:
             return {"rolling_accuracy": None, "sample_size": 0,
                     "note": "No predictions with known outcomes yet"}
