@@ -1,0 +1,5 @@
+fixture_id,home_team_id,away_team_id,status_short,match_date
+9000001,33,49,NS,2026-04-06
+9000002,40,42,NS,2026-04-06
+9000003,50,47,NS,2026-04-07
+9000004,66,34,NS,2026-04-07
