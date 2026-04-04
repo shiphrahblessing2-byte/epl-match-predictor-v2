@@ -1,0 +1,19 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy all needed files
+COPY models/   ./models/
+COPY src/api.py      ./src/api.py
+COPY src/predict.py  ./src/predict.py
+COPY src/config.py   ./src/config.py
+
+# HuggingFace Spaces requires port 7860
+EXPOSE 7860
+
+# Secrets injected at runtime as env vars — no .env file needed
+CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "7860"]
