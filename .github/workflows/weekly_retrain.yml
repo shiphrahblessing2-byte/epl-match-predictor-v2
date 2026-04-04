@@ -45,7 +45,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python src/features.py
+        run: python src/feature_engineer.py
 
       - name: Retrain model
         env:
