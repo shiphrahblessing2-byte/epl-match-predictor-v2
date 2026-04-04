@@ -1,0 +1,33 @@
+name: Keep HuggingFace Space Alive
+
+on:
+  schedule:
+    - cron: "0 23 * * 0"   # Sunday 23:00 UTC = Monday 02:00 EAT
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Ping HuggingFace Space
+        run: |
+          echo "🏓 Pinging HuggingFace Space..."
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://shiphrahb-epl-match-predictor.hf.space/health)
+          echo "Response code: $RESPONSE"
+          if [ "$RESPONSE" != "200" ]; then
+            echo "❌ Space returned $RESPONSE — may be sleeping"
+            exit 1
+          fi
+          echo "✅ Space is alive and responding"
+
+      - name: Warm up predict endpoint
+        run: |
+          curl -s -X POST \
+            https://shiphrahb-epl-match-predictor.hf.space/predict \
+            -H "Content-Type: application/json" \
+            -d '{"home_team_id": 33, "away_team_id": 49}' | \
+            python3 -c "import sys,json; d=json.load(sys.stdin); \
+            print(f'✅ Predict warm: {d[\"predicted\"]} ({d[\"confidence\"]})')"
