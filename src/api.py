@@ -17,9 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import SUPABASE_URL, SUPABASE_KEY, MODELS_DIR
-from predict import MODEL, FEATURE_COLS, LABEL_MAP, predict_match, predict_batch
-from csv_fallback import get_fixtures_fallback, get_predictions_fallback
+from src.config import SUPABASE_URL, SUPABASE_KEY, MODELS_DIR
+from src.predict import MODEL, FEATURE_COLS, LABEL_MAP, predict_match, predict_batch
+from src.csv_fallback import get_fixtures_fallback, get_predictions_fallback
 from supabase import create_client
 
 logging.basicConfig(level=logging.INFO)
