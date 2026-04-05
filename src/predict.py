@@ -21,7 +21,7 @@ RESULT_SHORT = {0: "away_win", 1: "draw", 2: "home_win"}
 # ── Load model artifacts once at import time ───────────────
 def load_model():
     model = CatBoostClassifier()
-    model.load_model(str(MODELS_DIR / "model.cbm"))
+    model.load_model(str(MODELS_DIR / "catboost_multileague_v2.cbm"))
     with open(MODELS_DIR / "feature_cols.pkl", "rb") as f:
         feature_cols = pickle.load(f)
     log.info(f"✅ Model loaded — {len(feature_cols)} features")
@@ -34,60 +34,68 @@ MODEL, FEATURE_COLS = load_model()
 # FEATURE BUILDER
 # ══════════════════════════════════════════════════════════
 
-def get_team_features(team_id: int, opp_id: int,
-                      client, match_date: datetime | None = None) -> dict:
-    """
-    Fetch the most recent feature row for team_id from matches_features.
-    Uses latest season 2024 record as the current form baseline.
-    """
-    if match_date is None:
-        match_date = datetime.now(timezone.utc)
+def get_team_features(home_id: int, opp_id: int,
+                      client, match_date: datetime | None = None,
+                      league_key: str = "EPL") -> dict:
 
-    # Get latest feature row for this team as home team
     resp = (
         client.table("matches_features")
         .select("*")
-        .eq("home_team_id", team_id)
+        .eq("home_team_id", home_id)
+        # ← REMOVE: .eq("league_key", league_key)
         .order("fixture_id", desc=True)
         .limit(1)
         .execute()
     )
+    row = resp.data[0] if resp.data else {}
 
-    if not resp.data:
-        # Fallback — use league average defaults
-        log.warning(f"No feature data for team {team_id} — using league avg")
-        return _league_avg_features(team_id, opp_id, match_date)
-
-    row = resp.data[0]
-
-    # Get opponent's latest stats
     opp_resp = (
         client.table("matches_features")
         .select("*")
         .eq("home_team_id", opp_id)
+        # ← REMOVE: .eq("league_key", league_key)
         .order("fixture_id", desc=True)
         .limit(1)
         .execute()
     )
     opp_row = opp_resp.data[0] if opp_resp.data else {}
 
-    # Get H2H win rate from historical matches
-    h2h = get_h2h_win_rate(team_id, opp_id, client)
+    h2h = get_h2h_win_rate(home_id, opp_id, client)
 
     return {
-        "venue_code":                 1,
-        "opp_code":                   opp_id,
-        "hour":                       match_date.hour,
-        "day_code":                   match_date.weekday(),
-        "goals_scored_rolling":       row.get("goals_scored_rolling", 1.5),
-        "goals_conceded_rolling":     row.get("goals_conceded_rolling", 1.5),
-        "wins_rolling":               row.get("wins_rolling", 0.38),
-        "clean_sheets_rolling":       row.get("clean_sheets_rolling", 0.23),
-        "win_streak":                 row.get("win_streak", 0),
-        "form_momentum":              row.get("form_momentum", 0.38),
-        "opp_goals_scored_rolling":   opp_row.get("goals_scored_rolling", 1.5),
-        "opp_goals_conceded_rolling": opp_row.get("goals_conceded_rolling", 1.5),
-        "h2h_win_rate":               h2h,
+        "league_key":                   league_key,   # ← still passes to model
+        "home_goals_scored_rolling":    row.get("goals_scored_rolling", 1.50),
+        "home_goals_conceded_rolling":  row.get("goals_conceded_rolling", 1.50),
+        "home_wins_rolling":            row.get("wins_rolling", 0.38),
+        "home_clean_sheets_rolling":    row.get("clean_sheets_rolling", 0.23),
+        "home_win_streak":              row.get("win_streak", 0),
+        "home_form_momentum":           row.get("form_momentum", 0.38),
+        "opp_goals_scored_rolling":     opp_row.get("goals_scored_rolling", 1.50),
+        "opp_goals_conceded_rolling":   opp_row.get("goals_conceded_rolling", 1.50),
+        "opp_wins_rolling":             opp_row.get("wins_rolling", 0.38),
+        "opp_clean_sheets_rolling":     opp_row.get("clean_sheets_rolling", 0.23),
+        "opp_win_streak":               opp_row.get("win_streak", 0),
+        "opp_form_momentum":            opp_row.get("form_momentum", 0.38),
+        "h2h_win_rate":                 h2h,
+    }
+
+def _league_avg_features(league_key: str = "EPL") -> dict:
+    """Neutral fallback when no DB data is available."""
+    return {
+        "league_key":                   league_key,
+        "home_goals_scored_rolling":    1.50,
+        "home_goals_conceded_rolling":  1.50,
+        "home_wins_rolling":            0.38,
+        "home_clean_sheets_rolling":    0.23,
+        "home_win_streak":              0,
+        "home_form_momentum":           0.38,
+        "opp_goals_scored_rolling":     1.50,
+        "opp_goals_conceded_rolling":   1.50,
+        "opp_wins_rolling":             0.38,
+        "opp_clean_sheets_rolling":     0.23,
+        "opp_win_streak":               0,
+        "opp_form_momentum":            0.38,
+        "h2h_win_rate":                 0.50,
     }
 
 
@@ -132,28 +140,28 @@ def _league_avg_features(team_id: int, opp_id: int,
 # ══════════════════════════════════════════════════════════
 
 def predict_match(home_id: int, away_id: int,
-                  client, match_date: datetime | None = None) -> dict:
-    """
-    Core prediction function — returns probabilities + predicted outcome.
-    """
+                  client, match_date: datetime | None = None,
+                  league_key: str = "EPL") -> dict:     # ← add league_key
     if match_date is None:
         match_date = datetime.now(timezone.utc)
 
-    features = get_team_features(home_id, away_id, client, match_date)
-    X = pd.DataFrame([features])[FEATURE_COLS].astype(float)
+    features = get_team_features(home_id, away_id, client,
+                                  match_date, league_key)  # ← pass it through
+    X = pd.DataFrame([features])[FEATURE_COLS]             # ← no .astype(float) — league_key is string
 
     probs      = MODEL.predict_proba(X)[0]
     pred_class = int(np.argmax(probs))
 
     return {
-        "home_team_id":  home_id,
-        "away_team_id":  away_id,
-        "predicted":     RESULT_SHORT[pred_class],
+        "home_team_id":    home_id,
+        "away_team_id":    away_id,
+        "league":          league_key,
+        "predicted":       RESULT_SHORT[pred_class],
         "predicted_label": LABEL_MAP[pred_class],
         "probabilities": {
-            "home_win":  round(float(probs[2]), 4),
-            "draw":      round(float(probs[1]), 4),
-            "away_win":  round(float(probs[0]), 4),
+            "home_win": round(float(probs[2]), 4),
+            "draw":     round(float(probs[1]), 4),
+            "away_win": round(float(probs[0]), 4),
         },
         "confidence":    round(float(max(probs)), 4),
         "features_used": features,

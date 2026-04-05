@@ -2,6 +2,7 @@
 Layer 5 — FastAPI Serving Layer
 Runs on HuggingFace Spaces (port 7860) or locally (port 8000).
 
+
 Run locally:
     uvicorn src.api:app --reload --port 8000
 """
@@ -12,23 +13,29 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
 
 from src.config import SUPABASE_URL, SUPABASE_KEY, MODELS_DIR
 from src.predict import MODEL, FEATURE_COLS, LABEL_MAP, predict_match, predict_batch
 from src.csv_fallback import get_fixtures_fallback, get_predictions_fallback
 from supabase import create_client
 
+
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+
 
 # ── Load metadata ──────────────────────────────────────────
 with open(MODELS_DIR / "metadata.json") as f:
     METADATA = json.load(f)
 
+
 VERSION = "1.0.0"
+
 
 # ── App ────────────────────────────────────────────────────
 app = FastAPI(
@@ -39,6 +46,7 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,8 +54,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ── Supabase client ────────────────────────────────────────
 db = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 
 # ══════════════════════════════════════════════════════════
@@ -55,18 +65,23 @@ db = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ══════════════════════════════════════════════════════════
 
 class MatchRequest(BaseModel):
-    home_team_id: int  = Field(..., example=33)
-    away_team_id: int  = Field(..., example=49)
+    home_team_id: int         = Field(..., example=33)
+    away_team_id: int         = Field(..., example=49)
+    league_key:   str         = Field("EPL", example="EPL",
+                                  description="One of: EPL, LIGA, UCL, UEL")
     match_date:   Optional[str] = Field(None, example="2026-04-05T15:00:00+00:00")
+
 
 
 class BatchRequest(BaseModel):
     matches: list[MatchRequest] = Field(..., max_length=50)
 
 
+
 # ══════════════════════════════════════════════════════════
 # ENDPOINTS
 # ══════════════════════════════════════════════════════════
+
 
 @app.get("/", tags=["Info"])
 def root():
@@ -83,6 +98,7 @@ def root():
     }
 
 
+
 @app.get("/health", tags=["Info"])
 def health():
     return {
@@ -93,6 +109,7 @@ def health():
         "test_accuracy": METADATA.get("metrics", {}).get("accuracy"),
         "timestamp":     datetime.now(timezone.utc).isoformat(),
     }
+
 
 
 @app.get("/model/info", tags=["Info"])
@@ -108,17 +125,24 @@ def model_info():
     }
 
 
+
 @app.post("/predict", tags=["Prediction"])
 def predict(req: MatchRequest):
-    """Predict outcome for a single match."""
     if req.home_team_id == req.away_team_id:
         raise HTTPException(400, "home_team_id and away_team_id must be different")
     try:
         match_date = datetime.fromisoformat(req.match_date) if req.match_date else None
-        return predict_match(req.home_team_id, req.away_team_id, db, match_date)
+        return predict_match(
+            req.home_team_id,
+            req.away_team_id,
+            db,
+            match_date,
+            league_key=req.league_key,    # ← ADD THIS
+        )
     except Exception as e:
         log.error(f"Prediction error: {e}")
         raise HTTPException(500, f"Prediction failed: {str(e)}")
+
 
 
 @app.post("/predict/batch", tags=["Prediction"])
@@ -130,6 +154,7 @@ def predict_batch_endpoint(req: BatchRequest):
     except Exception as e:
         log.error(f"Batch prediction error: {e}")
         raise HTTPException(500, f"Batch prediction failed: {str(e)}")
+
 
 
 @app.get("/fixtures", tags=["Fixtures"])
@@ -148,6 +173,7 @@ def all_fixtures(
         date_from = (now - timedelta(weeks=weeks_back)).isoformat()
         date_to   = (now + timedelta(weeks=weeks_ahead)).isoformat()
 
+
         query = (
             db.table("matches")
             .select("*")
@@ -158,10 +184,12 @@ def all_fixtures(
         if league:
             query = query.eq("league_key", league.upper())
 
+
         rows = query.execute().data or []
 
+
         for row in rows:
-            if row.get("league_key") == "EPL" and row.get("status_short") == "NS":
+            if row.get("league_key") in ("EPL", "LIGA", "UCL", "UEL") and row.get("status_short") == "NS":
                 try:
                     pred = predict_match(
                         row["home_team_id"],
@@ -170,6 +198,7 @@ def all_fixtures(
                         datetime.fromisoformat(
                             str(row["match_date"]).replace("Z", "+00:00")
                         ),
+                        league_key=row.get("league_key", "EPL"), 
                     )
                     row["prediction"] = pred
                 except Exception as pe:
@@ -178,11 +207,14 @@ def all_fixtures(
             else:
                 row["prediction"] = None
 
+
         return {"count": len(rows), "fixtures": rows}
+
 
     except Exception as e:
         log.error(f"/fixtures error: {e}")
         raise HTTPException(500, str(e))
+
 
 
 @app.get("/upcoming", tags=["Prediction"])
@@ -192,6 +224,7 @@ def upcoming_predictions():
     Falls back to CSV if Supabase is unavailable.
     """
     fixtures = []
+
 
     try:
         resp = (
@@ -206,6 +239,7 @@ def upcoming_predictions():
         fixtures = resp.data or []
     except Exception as e:
         log.warning(f"Supabase unavailable, trying CSV fallback: {e}")
+
 
     if not fixtures:
         log.info("Loading fixtures from CSV fallback...")
@@ -223,8 +257,10 @@ def upcoming_predictions():
         except Exception as csv_e:
             log.error(f"CSV fallback also failed: {csv_e}")
 
+
     if not fixtures:
         return {"count": 0, "predictions": [], "note": "No upcoming fixtures found"}
+
 
     try:
         predictions = []
@@ -236,6 +272,7 @@ def upcoming_predictions():
                 datetime.fromisoformat(
                     str(fix["match_date"]).replace("Z", "+00:00")
                 ),
+                league_key=fix.get("league_key", "EPL")
             )
             pred["fixture_id"] = fix["fixture_id"]
             predictions.append(pred)
@@ -243,6 +280,7 @@ def upcoming_predictions():
     except Exception as e:
         log.error(f"Upcoming predictions error: {e}")
         raise HTTPException(500, str(e))
+
 
 
 @app.get("/accuracy", tags=["Evaluation"])
@@ -271,12 +309,14 @@ def rolling_accuracy():
                 for r in raw
             ]
 
+
         if not rows:
             return {
                 "rolling_accuracy": None,
                 "sample_size":      0,
                 "note":             "No predictions with known outcomes yet",
             }
+
 
         correct = sum(1 for r in rows if r.get("correct"))
         return {
