@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import Link from 'next/link'
-import ThemeToggle from '@/components/ThemeToggle'
+import ThemeToggle from '@/app/components/ThemeToggle'
 
 export const metadata: Metadata = {
   title: 'Match Predictor — EPL, La Liga, UCL, UEL',

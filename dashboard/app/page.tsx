@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { getTeamName } from '@/lib/teams'
-import RefreshButton from '@/components/RefreshButton'
+import RefreshButton from '@/app/components/RefreshButton'
 
 const API = process.env.NEXT_PUBLIC_API_URL
 
