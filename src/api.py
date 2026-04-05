@@ -153,6 +153,100 @@ def predict_batch_endpoint(req: BatchRequest):
     except Exception as e:
         log.error(f"Batch prediction error: {e}")
         raise HTTPException(500, f"Batch prediction failed: {str(e)}")
+    
+@app.get("/fixtures", tags=["Fixtures"])
+def all_fixtures(
+    league: str = None,
+    weeks_back: int = 1,
+    weeks_ahead: int = 2
+):
+    """
+    Return fixtures across all leagues with date range filter.
+    For EPL upcoming NS fixtures, includes ML predictions.
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        now        = datetime.now(timezone.utc)
+        date_from  = (now - timedelta(weeks=weeks_back)).isoformat()
+        date_to    = (now + timedelta(weeks=weeks_ahead)).isoformat()
+
+        query = (
+            db.table("matches")
+            .select("*")
+            .gte("match_date", date_from)
+            .lte("match_date", date_to)
+            .order("match_date", desc=False)
+        )
+
+        if league:
+            query = query.eq("league_key", league.upper())
+
+        rows = query.execute().data or []
+
+        # Add predictions only for EPL upcoming matches
+        for row in rows:
+            if row.get("league_key") == "EPL" and row.get("status_short") == "NS":
+                try:
+                    pred = predict_match(
+                        row["home_team_id"],
+                        row["away_team_id"],
+                        db,
+                        datetime.fromisoformat(row["match_date"]),
+                    )
+                    row["prediction"] = pred
+                except Exception as e:
+                    row["prediction"] = None
+                    log.warning(f"Prediction failed for fixture {row.get('fixture_id')}: {e}")
+            else:
+                row["prediction"] = None
+
+        return {"count": len(rows), "fixtures": rows}
+
+    except Exception as e:
+        log.error(f"Fixtures error: {e}")
+        raise HTTPException(500, str(e))
+    
+@app.get("/fixtures", tags=["Fixtures"])
+def all_fixtures(league: str = None, weeks_back: int = 1, weeks_ahead: int = 3):
+    """Return fixtures across all leagues with optional predictions for EPL NS matches."""
+    try:
+        from datetime import datetime, timezone, timedelta
+        now       = datetime.now(timezone.utc)
+        date_from = (now - timedelta(weeks=weeks_back)).isoformat()
+        date_to   = (now + timedelta(weeks=weeks_ahead)).isoformat()
+
+        query = (
+            db.table("matches")
+            .select("*")
+            .gte("match_date", date_from)
+            .lte("match_date", date_to)
+            .order("match_date", desc=False)
+        )
+        if league:
+            query = query.eq("league_key", league.upper())
+
+        rows = query.execute().data or []
+
+        # Add ML predictions only for EPL upcoming matches
+        for row in rows:
+            if row.get("league_key") == "EPL" and row.get("status_short") == "NS":
+                try:
+                    pred = predict_match(
+                        row["home_team_id"], row["away_team_id"], db,
+                        datetime.fromisoformat(str(row["match_date"]).replace("Z", "+00:00")),
+                    )
+                    row["prediction"] = pred
+                except Exception as pe:
+                    row["prediction"] = None
+                    log.warning(f"Prediction failed for {row.get('fixture_id')}: {pe}")
+            else:
+                row["prediction"] = None
+
+        return {"count": len(rows), "fixtures": rows}
+
+    except Exception as e:
+        log.error(f"Fixtures endpoint error: {e}")
+        raise HTTPException(500, str(e))
 
 
 # REPLACE WITH:

@@ -1,7 +1,7 @@
 """
-Fetch upcoming EPL fixtures from ESPN's public API.
-No API key required. No registration. Always free.
-Endpoint: site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard
+Fetch fixtures from multiple leagues via ESPN public API.
+Covers: Premier League, La Liga, Champions League, Europa League.
+Fetches both past results (last 2 weeks) and upcoming (next 4 weeks).
 """
 import logging
 import sys
@@ -16,133 +16,150 @@ from config import SUPABASE_URL, SUPABASE_KEY
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard"
+# Updated LEAGUES — add weekly flag
+LEAGUES = {
+    "EPL":  {"code": "eng.1",          "name": "Premier League",   "flag": "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "weekly": True},
+    "UCL":  {"code": "uefa.champions",  "name": "Champions League", "flag": "⭐",         "weekly": False},
+    "UEL":  {"code": "uefa.europa",     "name": "Europa League",    "flag": "🟠",         "weekly": False},
+    "LIGA": {"code": "esp.1",           "name": "La Liga",          "flag": "🇪🇸",         "weekly": True},
+}
 
-# ESPN team ID → your ML model's api-sports team ID
+ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+
+# EPL team ID mappings (ESPN → model)
 ESPN_TEAM_MAP = {
-    # ✅ Confirmed correct mappings
-    "331":  51,   # Brighton
-    "349":  73,   # Bournemouth
-    "359":  42,   # Arsenal          ← WAS 33 (Man Utd) — CRITICAL FIX
-    "360":  33,   # Manchester United ← WAS missing
-    "361":  34,   # Newcastle United
-    "362":  66,   # Aston Villa
-    "363":  49,   # Chelsea
-    "364":  40,   # Liverpool
-    "367":  47,   # Tottenham
-    "368":  45,   # Everton
-    "370":  67,   # Fulham
-    "371":  48,   # West Ham
-    "380":  71,   # Wolves
-    "382":  50,   # Manchester City
-    "384":  52,   # Crystal Palace
-    "393":  65,   # Nottingham Forest ← WAS unmapped (393)
-    "397":  55,   # Brentford
-    # ⚠️  Newly promoted — no training data, use closest proxy
-    "366":  41,   # Sunderland → proxy: Southampton (similar promoted profile)
-    "379":  46,   # Burnley → proxy: Leicester (similar mid-table profile)
-    "333":  57,   # Ipswich
-    "375":  46,   # Leicester
+    "331": 51,  "349": 73,  "359": 42,  "360": 33,  "361": 34,
+    "362": 66,  "363": 49,  "364": 40,  "367": 47,  "368": 45,
+    "370": 67,  "371": 48,  "380": 71,  "382": 50,  "384": 52,
+    "393": 65,  "397": 55,  "366": 41,  "379": 46,  "333": 57,
+    "375": 46,
 }
 
 
-def fetch_week_fixtures(date_str: str = None) -> list[dict]:
-    """Fetch fixtures for a specific date (YYYYMMDD) or current week."""
-    params = {}
-    if date_str:
-        params["dates"] = date_str
-    resp = requests.get(ESPN_URL, params=params, timeout=15)
-    resp.raise_for_status()
-    return resp.json().get("events", [])
-
-
-def fetch_upcoming_fixtures(weeks_ahead: int = 2) -> list[dict]:
-    """Fetch fixtures for the next N weeks."""
-    all_events = []
-    today = datetime.now(timezone.utc)
-
-    for week in range(weeks_ahead):
-        target = today + timedelta(weeks=week)
-        date_str = target.strftime("%Y%m%d")
-        log.info(f"  Fetching week of {date_str}...")
-        try:
-            events = fetch_week_fixtures(date_str)
-            # Keep only scheduled (not started/finished)
-            upcoming = [e for e in events if e.get("status", {}).get("type", {}).get("state") == "pre"]
-            all_events.extend(upcoming)
-            log.info(f"  Got {len(upcoming)} upcoming fixtures")
-        except Exception as e:
-            log.warning(f"  Failed for week {date_str}: {e}")
-
-    return all_events
-
-
-def parse_event(event: dict) -> dict | None:
-    """Convert ESPN event → Supabase matches row."""
+def fetch_fixtures_for_date(league_code: str, date_str: str) -> list[dict]:
+    """Fetch fixtures for a specific date from ESPN."""
+    url = f"{ESPN_BASE}/{league_code}/scoreboard"
     try:
-        comp  = event["competitions"][0]
-        home  = next(t for t in comp["competitors"] if t["homeAway"] == "home")
-        away  = next(t for t in comp["competitors"] if t["homeAway"] == "away")
+        resp = requests.get(url, params={"dates": date_str}, timeout=15)
+        resp.raise_for_status()
+        return resp.json().get("events", [])
+    except Exception as e:
+        log.warning(f"  Failed {league_code} on {date_str}: {e}")
+        return []
+
+
+def parse_event(event: dict, league_key: str) -> dict | None:
+    """Convert ESPN event → Supabase row."""
+    try:
+        comp   = event["competitions"][0]
+        home   = next(t for t in comp["competitors"] if t["homeAway"] == "home")
+        away   = next(t for t in comp["competitors"] if t["homeAway"] == "away")
+        status = event.get("status", {}).get("type", {}).get("state", "pre")
 
         espn_home_id = home["team"]["id"]
         espn_away_id = away["team"]["id"]
 
-        # Map ESPN IDs to your model's team IDs
+        # Map team IDs — EPL uses lookup, others use ESPN IDs directly
         home_id = ESPN_TEAM_MAP.get(espn_home_id, int(espn_home_id))
         away_id = ESPN_TEAM_MAP.get(espn_away_id, int(espn_away_id))
+
+        # Parse scores for finished matches
+        home_goals = None
+        away_goals = None
+        result     = None
+        if status == "post":
+            try:
+                home_goals = int(home.get("score", 0))
+                away_goals = int(away.get("score", 0))
+                result = 2 if home_goals > away_goals else (1 if home_goals == away_goals else 0)
+            except (ValueError, TypeError):
+                pass
 
         return {
             "fixture_id":    int(event["id"]),
             "match_date":    event["date"],
             "season":        "2025",
-            "league_round":  event.get("week", {}).get("number", ""),
+            "league_key":    league_key,
+            "league_name":   LEAGUES[league_key]["name"],
+            "league_round":  str(event.get("week", {}).get("number", "")),
             "home_team_id":  home_id,
             "away_team_id":  away_id,
-            "home_goals":    None,
-            "away_goals":    None,
-            "result":        None,
-            "status_short":  "NS",
-            # For display in logs
-            "_home_name":    home["team"]["displayName"],
-            "_away_name":    away["team"]["displayName"],
-            "_espn_home_id": espn_home_id,
-            "_espn_away_id": espn_away_id,
+            "home_team":     home["team"]["displayName"],
+            "away_team":     away["team"]["displayName"],
+            "home_goals":    home_goals,
+            "away_goals":    away_goals,
+            "result":        result,
+            "status_short":  "FT" if status == "post" else ("LIVE" if status == "in" else "NS"),
         }
-    except (KeyError, StopIteration) as e:
+    except (KeyError, StopIteration, ValueError) as e:
         log.warning(f"  Skipping event {event.get('id')}: {e}")
         return None
 
 
 def run(dry_run: bool = False):
-    log.info("Fetching upcoming EPL fixtures from ESPN (no API key needed)...")
-    events  = fetch_upcoming_fixtures(weeks_ahead=4)
-    parsed  = [parse_event(e) for e in events]
-    rows    = [r for r in parsed if r is not None]
+    today  = datetime.now(timezone.utc)
+    all_rows = []
 
-    if not rows:
-        log.warning("No upcoming fixtures found")
-        return 0
+    for league_key, league_info in LEAGUES.items():
+        code = league_info["code"]
+        log.info(f"\n{'='*50}")
+        log.info(f"Fetching {league_info['name']} ({code})...")
 
-    log.info(f"\nFound {len(rows)} upcoming fixtures:")
-    for r in rows:
-        log.info(
-            f"  {r['fixture_id']}: "
-            f"{r['_home_name']} (espn:{r['_espn_home_id']}→model:{r['home_team_id']}) vs "
-            f"{r['_away_name']} (espn:{r['_espn_away_id']}→model:{r['away_team_id']}) "
-            f"on {str(r['match_date'])[:10]}"
-        )
+        if league_info["weekly"]:
+            # Weekly leagues — check weekly intervals (-2 to +4 weeks)
+            offsets = [timedelta(weeks=w) for w in range(-2, 4)]
+        else:
+            # Mid-week (UCL/UEL) — scan every day for past 14 + next 30 days
+            offsets = [timedelta(days=d) for d in range(-14, 30)]
+
+        seen_dates = set()
+        for offset in offsets:
+            target   = today + offset
+            date_str = target.strftime("%Y%m%d")
+            if date_str in seen_dates:
+                continue
+            seen_dates.add(date_str)
+
+            events = fetch_fixtures_for_date(code, date_str)
+            for event in events:
+                row = parse_event(event, league_key)
+                if row:
+                    all_rows.append(row)
+
+            if events:
+                label = "past" if offset.days < 0 else ("current" if offset.days == 0 else "upcoming")
+                log.info(f"  {date_str} ({label}): {len(events)} fixtures")
+
+    # Deduplicate by fixture_id
+    seen     = set()
+    unique   = []
+    for r in all_rows:
+        if r["fixture_id"] not in seen:
+            seen.add(r["fixture_id"])
+            unique.append(r)
+
+    log.info(f"\n✅ Total: {len(unique)} unique fixtures across all leagues")
 
     if dry_run:
+        for r in unique:
+            log.info(
+                f"  [{r['league_key']}] {r['status_short']} "
+                f"{r['home_team']} vs {r['away_team']} "
+                f"on {str(r['match_date'])[:10]}"
+                + (f" — {r['home_goals']}-{r['away_goals']}" if r['home_goals'] is not None else "")
+            )
         log.info("\nDRY RUN — skipping Supabase write")
-        return len(rows)
+        return len(unique)
 
-    # Strip internal display fields before inserting
-    safe_rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
-
+    # Upsert to Supabase in batches
     db = create_client(SUPABASE_URL, SUPABASE_KEY)
-    db.table("matches").upsert(safe_rows, on_conflict="fixture_id").execute()
-    log.info(f"\n✅ Upserted {len(safe_rows)} fixtures into Supabase")
-    return len(safe_rows)
+    for i in range(0, len(unique), 50):
+        batch = unique[i:i+50]
+        db.table("matches").upsert(batch, on_conflict="fixture_id").execute()
+        log.info(f"  Upserted batch {i//50 + 1}: {len(batch)} rows")
+
+    log.info(f"\n✅ Done — {len(unique)} fixtures in Supabase")
+    return len(unique)
 
 
 if __name__ == "__main__":
