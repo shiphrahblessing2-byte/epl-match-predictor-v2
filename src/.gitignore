@@ -61,7 +61,6 @@ data/processed/*.csv
 
 # ── MODELS — binary files (use GitHub Releases instead) ───
 models/*.cbm
-models/*.pkl
 models/*.bin
 models/*.h5
 models/*.pt
