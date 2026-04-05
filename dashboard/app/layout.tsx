@@ -5,7 +5,7 @@ import ThemeToggle from '@/app/components/ThemeToggle'
 
 export const metadata: Metadata = {
   title: 'Match Predictor — EPL, La Liga, UCL, UEL',
-  description: 'AI-powered football predictions across Europe's top competitions',
+  description: 'AI-powered football predictions across Europe`s top competitions',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
