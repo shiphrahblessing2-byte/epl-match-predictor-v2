@@ -9,7 +9,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy everything needed
 COPY models/  ./models/
 COPY src/     ./src/
-COPY data/    ./data/
 
 # HuggingFace Spaces requires port 7860
 EXPOSE 7860
