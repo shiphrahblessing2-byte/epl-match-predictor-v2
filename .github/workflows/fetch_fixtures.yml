@@ -1,0 +1,21 @@
+# .github/workflows/fetch_fixtures.yml
+name: Fetch Daily Fixtures
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # runs every day at 6AM UTC
+  workflow_dispatch:        # allows manual trigger from GitHub UI
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python src/fetch_upcoming_espn.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
