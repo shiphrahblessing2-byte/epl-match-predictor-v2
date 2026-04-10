@@ -309,7 +309,7 @@ def train_final_model(df: pd.DataFrame, dry_run: bool, fold_metrics: list) -> Ca
     # 3. Metadata JSON
     meta = {
         "trained_at":      datetime.now(timezone.utc).isoformat(),
-        "train_seasons":   [2021, 2022, 2023, 2024],
+        "train_seasons":   [2020, 2021, 2022, 2023, 2024],   # ✅ add 2020
         "leagues":         ["EPL", "LIGA", "UCL", "UEL"],
         "feature_cols":    FEATURE_COLS,
         "cat_features":    CAT_FEATURES,
@@ -317,6 +317,7 @@ def train_final_model(df: pd.DataFrame, dry_run: bool, fold_metrics: list) -> Ca
         "metrics_fold2":   fold_metrics[1],
         "gate_passed":     passed,
         "catboost_params": {k: str(v) for k, v in CATBOOST_PARAMS.items()},
+    # ✅ ADD — what health endpoint reads
     }
     meta_path = MODELS_DIR / "metadata.json"
     with open(meta_path, "w") as f:
