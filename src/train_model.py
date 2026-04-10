@@ -30,7 +30,7 @@ from sklearn.metrics import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import MODELS_DIR, validate_config
+from config import MODELS_DIR, REPORTS_DIR, validate_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,7 +44,9 @@ log = logging.getLogger(__name__)
 
 # ── Feature columns ───────────────────────────────────────
 FEATURE_COLS = [
-    "league_key",                    # ← NEW (categorical — CatBoost handles natively)
+    "home_team_id",          # ✅ ADD — home team identity
+    "opp_code",              # ✅ ADD — away team identity (= away_team_id)
+    "league_key",
     "home_goals_scored_rolling",
     "home_goals_conceded_rolling",
     "home_wins_rolling",
@@ -58,14 +60,18 @@ FEATURE_COLS = [
     "opp_win_streak",
     "opp_form_momentum",
     "h2h_win_rate",
+    "attack_vs_defence",
+    "opp_attack_vs_defence",
+    # ✅ REMOVED: form_diff, goal_diff_rolling, opp_goal_diff_rolling
 ]
 
-CAT_FEATURES = ["league_key"]   # CatBoost categorical columns
+CAT_FEATURES = ["league_key", "home_team_id", "opp_code"]   # CatBoost categorical columns
 TARGET_COL   = "result"          # 0=away win, 1=draw, 2=home win
 WEIGHT_COL   = "sample_weight"   # time-decay weights
 
 # ── Season decay weights ──────────────────────────────────
 SEASON_WEIGHTS = {
+    2020: 0.40,
     2021: 0.50,
     2022: 0.65,
     2023: 0.82,
@@ -83,15 +89,20 @@ GATE = {
 # ── CatBoost config ───────────────────────────────────────
 CATBOOST_PARAMS = dict(
     iterations=800,
-    depth=6,
+    depth=4,                   # ✅ reduce 5→4 (16 leaves max vs 32)
     learning_rate=0.05,
-    l2_leaf_reg=3,
+    l2_leaf_reg=10,            # ✅ increase 5→10 (much stronger penalty)
+    min_data_in_leaf=30,       # ✅ increase 20→30
+    bootstrap_type="Bernoulli", 
+    subsample=0.8,             # ✅ ADD — use 80% of rows per tree
+    colsample_bylevel=0.8,     # ✅ ADD — use 80% of features per split
     loss_function="MultiClass",
     eval_metric="Accuracy",
-    auto_class_weights="Balanced",   # ← handles draw/home/away imbalance
+    auto_class_weights="Balanced",
     cat_features=CAT_FEATURES,
     random_seed=42,
     verbose=100,
+    early_stopping_rounds=100,
 )
 
 
@@ -153,8 +164,6 @@ def gate_check(metrics: dict) -> tuple[bool, list[str]]:
 def train_catboost(X_train, y_train, weights,
                    X_val=None, y_val=None) -> CatBoostClassifier:
     params = {**CATBOOST_PARAMS}
-    if X_val is not None:
-        params["early_stopping_rounds"] = 50
     model = CatBoostClassifier(**params)
     eval_set = (X_val, y_val) if X_val is not None else None
     model.fit(
@@ -221,8 +230,8 @@ def evaluate(model, X_test, y_test, label: str) -> dict:
 
 def walk_forward_validate(df: pd.DataFrame):
     folds = [
-        (2021, 2022, 2023, "Fold 1 — Train 2021-22+2022-23 → Validate 2023-24"),
-        (2021, 2023, 2024, "Fold 2 — Train 2021-22 to 2023-24 → Validate 2024-25"),
+        (2020, 2022, 2023, "Fold 1 — Train 2020 to 2022-23 → Validate 2023-24"),
+        (2020, 2023, 2024, "Fold 2 — Train 2020 to 2023-24 → Validate 2024-25"),
     ]
     fold_metrics = []
     for train_start, train_end, val_year, label in folds:
@@ -317,6 +326,21 @@ def train_final_model(df: pd.DataFrame, dry_run: bool, fold_metrics: list) -> Ca
     print(f"   ✅ {feat_path}")
     print(f"   ✅ {meta_path}")
 
+     # 4. Evaluation summary for monitor.py  ← ADD HERE, still indented inside function
+    summary = {
+        "f1_weighted":        metrics["f1_weighted"],
+        "precision_weighted": metrics["precision_weighted"],
+        "brier_score":        metrics["brier_score"],
+        "draw_recall":        metrics["draw_recall"],
+        "accuracy":           metrics["accuracy"],
+        "gate_passed":        passed,
+    }
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    summary_path = REPORTS_DIR / "evaluation_summary.json"
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"   ✅ {summary_path}")
+
     # ── Feature importance ─────────────────────────────────
     print("\n🌟 Top Feature Importances:")
     feat_imp = pd.Series(
@@ -362,3 +386,5 @@ if __name__ == "__main__":
                         help="Evaluate only — do not save model artifacts")
     args = parser.parse_args()
     main(dry_run=args.dry_run)
+
+

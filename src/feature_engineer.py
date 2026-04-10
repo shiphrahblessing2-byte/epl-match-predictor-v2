@@ -145,24 +145,21 @@ def momentum(team_df: pd.DataFrame, window: int = ROLLING_WINDOW) -> pd.DataFram
     return team_df
 
 
+# ✅ FIX — add league_key param
 def h2h_win_rate(df: pd.DataFrame, home_id: int, away_id: int,
-                 before_date: pd.Timestamp) -> float:
-    """
-    Historical win rate of home_id vs away_id, only for matches BEFORE before_date.
-    Returns proportion of wins (from home_id's perspective).
-    Returns 0.5 if no history (neutral prior).
-    """
+                 before_date: pd.Timestamp, league_key: str = None) -> float:
     mask = (
         (
-            (df["home_team_id"] == home_id) & (df["away_team_id"] == away_id) |
-            (df["home_team_id"] == away_id) & (df["away_team_id"] == home_id)
+            ((df["home_team_id"] == home_id) & (df["away_team_id"] == away_id)) |
+            ((df["home_team_id"] == away_id) & (df["away_team_id"] == home_id))
         )
         & (df["match_date"] < before_date)
     )
+    if league_key:
+        mask = mask & (df["league_key"] == league_key)   # ✅ same-league H2H only
     h2h = df[mask]
     if h2h.empty:
-        return 0.5   # neutral prior — no history
-
+        return 0.5
     wins = 0
     for _, row in h2h.iterrows():
         if row["home_team_id"] == home_id and row["result"] == 2:
@@ -230,12 +227,16 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     log.info("⚙️  Building team-level rows...")
     team_rows = build_team_rows(df)
-    all_teams  = team_rows["team_id"].unique()
 
-    log.info(f"⚙️  Computing rolling stats for {len(all_teams)} teams...")
+    # ✅ FIX — groups by league_key + team_id (no cross-league contamination)
+    all_team_leagues = team_rows[["league_key", "team_id"]].drop_duplicates()
+    log.info(f"⚙️  Computing rolling stats for {len(all_team_leagues)} team-league combos...")
     processed = []
-    for team_id in all_teams:
-        t = team_rows[team_rows["team_id"] == team_id].copy()
+    for _, grp in all_team_leagues.iterrows():
+        t = team_rows[
+            (team_rows["team_id"] == grp["team_id"]) &
+            (team_rows["league_key"] == grp["league_key"])
+        ].copy()
         t = rolling_averages(t)
         t = win_streak(t)
         t = momentum(t)
@@ -260,10 +261,14 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     away_feats = enriched[enriched["venue"] == "away"][[
         "fixture_id", "team_id",
         "goals_scored_rolling", "goals_conceded_rolling",
+        "wins_rolling", "clean_sheets_rolling",
+        "win_streak", "form_momentum",
     ]].copy()
     away_feats.columns = [
         "fixture_id", "away_team_id",
         "opp_goals_scored_rolling", "opp_goals_conceded_rolling",
+        "opp_wins_rolling", "opp_clean_sheets_rolling",
+        "opp_win_streak", "opp_form_momentum",
     ]
 
     # Merge home + away features into one row per fixture
@@ -272,9 +277,9 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # Add categorical encodings
     features = encode_categories(features)
 
-    # Add season from original df
+    # ✅ FIX — include league_key in merge
     features = features.merge(
-        df[["fixture_id", "season"]], on="fixture_id"
+        df[["fixture_id", "season", "league_key"]], on="fixture_id"
     )
 
     # Add H2H win rate
@@ -285,28 +290,37 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
             row["home_team_id"],
             row["away_team_id"],
             row["match_date"],
+            row["league_key"],   # ✅ same-league H2H only
         ),
         axis=1,
     )
 
-    # Final column selection matching Supabase schema
+    # Final column selection
     output_cols = [
         "fixture_id", "home_team_id", "away_team_id", "season",
+        "league_key",
         "venue_code", "opp_code", "hour", "day_code",
         "goals_scored_rolling", "goals_conceded_rolling",
         "wins_rolling", "clean_sheets_rolling",
         "win_streak", "form_momentum",
         "opp_goals_scored_rolling", "opp_goals_conceded_rolling",
+        "opp_wins_rolling", "opp_clean_sheets_rolling",
+        "opp_win_streak", "opp_form_momentum",
         "h2h_win_rate",
     ]
-    
-    features = features[output_cols].round(4)
 
-    # Fill NaN rolling stats with league average defaults (not 0 — avoids bias)
+    # ✅ FIX — round numeric columns only (league_key is string)
+    features = features[output_cols]
+    numeric_cols = features.select_dtypes(include="number").columns
+    features[numeric_cols] = features[numeric_cols].round(4)
+
+    # Fill NaN rolling stats with league average defaults
     rolling_cols = [
         "goals_scored_rolling", "goals_conceded_rolling",
         "wins_rolling", "clean_sheets_rolling",
         "opp_goals_scored_rolling", "opp_goals_conceded_rolling",
+        "opp_wins_rolling", "opp_clean_sheets_rolling",
+        "opp_win_streak", "opp_form_momentum",
     ]
     for col in rolling_cols:
         features[col] = features[col].fillna(features[col].mean())

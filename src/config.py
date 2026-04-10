@@ -37,8 +37,6 @@ EPL_SEASON    = int(os.getenv("EPL_SEASON", 2024))
 # ── Validation ─────────────────────────────────────────────
 def validate_config():
     missing = []
-    if not API_FOOTBALL_KEY:
-        missing.append("API_FOOTBALL_KEY")
     if not SUPABASE_URL:
         missing.append("SUPABASE_URL")
     if not SUPABASE_KEY:

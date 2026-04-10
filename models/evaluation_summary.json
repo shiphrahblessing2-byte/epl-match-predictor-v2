@@ -1,0 +1,8 @@
+{
+  "f1_weighted": 0.4603,
+  "precision_weighted": 0.4685,
+  "brier_score": 0.6512,
+  "draw_recall": 0.1828,
+  "accuracy": 0.4789,
+  "gate_passed": true
+}
