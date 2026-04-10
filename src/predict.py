@@ -56,6 +56,19 @@ def get_h2h_win_rate(home_id: int, away_id: int, client) -> float:
     )
     return round(wins / len(h2h), 4)
 
+def get_team_name(team_id: int, client) -> str:
+    try:
+        resp = (
+            client.table("teams")
+            .select("team_name")           # ← was "name"
+            .eq("team_id", team_id)
+            .limit(1)
+            .execute()
+        )
+        return resp.data[0]["team_name"] if resp.data else f"Team {team_id}"  # ← was "name"
+    except:
+        return f"Team {team_id}"
+
 
 def _neutral_defaults(home_id: int, opp_id: int, league_key: str) -> dict:
     """Fallback when no DB data is available — uses league averages."""
@@ -167,6 +180,8 @@ def predict_match(home_id: int, away_id: int,
     return {
         "home_team_id":    home_id,
         "away_team_id":    away_id,
+        "home_team_name":  get_team_name(home_id, client),   # ✅ ADD
+        "away_team_name":  get_team_name(away_id, client),   # ✅ ADD
         "league":          league_key,
         "predicted":       RESULT_SHORT[pred_class],
         "predicted_label": LABEL_MAP[pred_class],
