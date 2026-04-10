@@ -1,6 +1,7 @@
 {
   "trained_at": "2026-04-10T02:12:29.019178+00:00",
   "train_seasons": [
+    2020,
     2021,
     2022,
     2023,
@@ -68,5 +69,13 @@
     "random_seed": "42",
     "verbose": "100",
     "early_stopping_rounds": "100"
-  }
+  },
+  "metrics": {
+    "accuracy": 0.4829,
+    "f1_weighted": 0.4853,
+    "brier_score": 0.6195,
+    "fold1_accuracy": 0.5317,
+    "fold2_accuracy": 0.4829
+  },
+  "test_season": 2025
 }
