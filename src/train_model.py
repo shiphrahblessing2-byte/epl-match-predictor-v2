@@ -44,28 +44,81 @@ log = logging.getLogger(__name__)
 
 # ── Feature columns ───────────────────────────────────────
 FEATURE_COLS = [
-    "home_team_id",          # ✅ ADD — home team identity
-    "opp_code",              # ✅ ADD — away team identity (= away_team_id)
+    # ── Identity / context ─────────────────────────────
+    "home_team_id",
+    "opp_code",
     "league_key",
+    "venue_code",
+    "hour",
+    "day_code",
+
+    # ── Home rolling form ──────────────────────────────
     "home_goals_scored_rolling",
     "home_goals_conceded_rolling",
     "home_wins_rolling",
     "home_clean_sheets_rolling",
     "home_win_streak",
     "home_form_momentum",
+    "home_form_at_home",       # ✅ NEW
+
+    # ── Opponent rolling form ──────────────────────────
     "opp_goals_scored_rolling",
     "opp_goals_conceded_rolling",
     "opp_wins_rolling",
     "opp_clean_sheets_rolling",
     "opp_win_streak",
     "opp_form_momentum",
+    "away_form_away",          # ✅ NEW
+
+    # ── H2H + derived matchup ─────────────────────────
     "h2h_win_rate",
     "attack_vs_defence",
     "opp_attack_vs_defence",
-    # ✅ REMOVED: form_diff, goal_diff_rolling, opp_goal_diff_rolling
+    "form_diff",               # ✅ NEW
+    "goal_diff_rolling",       # ✅ NEW
+    "opp_goal_diff_rolling",   # ✅ NEW
+
+    # ── Elo ratings ────────────────────────────────────
+    "home_elo",
+    "away_elo",
+    "elo_diff",
+    "venue_elo_boost",         # ✅ NEW
+
+    # ── xG features (EPL + LIGA, 0 for UCL/UEL) ───────
+    "home_xg_rolling",
+    "opp_xg_rolling",
+    "forecast_home_win",
+    "forecast_draw",
+    "forecast_away_win",
+    "xg_diff",                 # ✅ NEW
+    "xg_rolling_diff",         # ✅ NEW
+
+    # ── Match stats (74% coverage, imputed rest) ───────
+    "home_shots",              # ✅ NEW
+    "away_shots",              # ✅ NEW
+    "home_shots_on_target",    # ✅ NEW
+    "away_shots_on_target",    # ✅ NEW
+    "home_corners",            # ✅ NEW
+    "away_corners",            # ✅ NEW
+    "home_possession",         # ✅ NEW
+    "away_possession",         # ✅ NEW
+    "sot_diff",                # ✅ NEW
+    "possession_diff",         # ✅ NEW
+    "corners_diff",            # ✅ NEW
+    "shots_diff",              # ✅ NEW
+    "shots_on_target_diff",    # ✅ NEW
+
+    # ── Injury features (sparse — CatBoost handles) ───
+    "home_injuries",           # ✅ NEW
+    "away_injuries",           # ✅ NEW
+    "injury_diff",             # ✅ NEW
+    "home_form_adj",           # ✅ NEW
+    "away_form_adj",           # ✅ NEW
+    "form_adj_diff",           # ✅ NEW
 ]
 
-CAT_FEATURES = ["league_key", "home_team_id", "opp_code"]   # CatBoost categorical columns
+CAT_FEATURES = ["league_key", "home_team_id", "opp_code"]  # unchanged
+CAT_FEATURES = ["league_key","home_team_id", "opp_code"]   # CatBoost categorical columns
 TARGET_COL   = "result"          # 0=away win, 1=draw, 2=home win
 WEIGHT_COL   = "sample_weight"   # time-decay weights
 
@@ -88,21 +141,21 @@ GATE = {
 
 # ── CatBoost config ───────────────────────────────────────
 CATBOOST_PARAMS = dict(
-    iterations=800,
-    depth=4,                   # ✅ reduce 5→4 (16 leaves max vs 32)
+    iterations=1000,           # ↑ was 800 — more features need more trees
+    depth=6,                   # ↑ was 4 — richer feature set can go deeper
     learning_rate=0.05,
-    l2_leaf_reg=10,            # ✅ increase 5→10 (much stronger penalty)
-    min_data_in_leaf=30,       # ✅ increase 20→30
-    bootstrap_type="Bernoulli", 
-    subsample=0.8,             # ✅ ADD — use 80% of rows per tree
-    colsample_bylevel=0.8,     # ✅ ADD — use 80% of features per split
+    l2_leaf_reg=10,
+    min_data_in_leaf=20,       # ↓ was 30 — more features, can reduce this slightly
+    bootstrap_type="Bernoulli",
+    subsample=0.8,
+    colsample_bylevel=0.8,
+    early_stopping_rounds=100,
     loss_function="MultiClass",
-    eval_metric="Accuracy",
-    auto_class_weights="Balanced",
+    eval_metric="TotalF1",     # ✅ was "Accuracy" — better for imbalanced classes
+    auto_class_weights="Balanced",  # already correct ✅
     cat_features=CAT_FEATURES,
     random_seed=42,
     verbose=100,
-    early_stopping_rounds=100,
 )
 
 
@@ -271,9 +324,21 @@ def train_final_model(df: pd.DataFrame, dry_run: bool, fold_metrics: list) -> Ca
     y = df[TARGET_COL].astype(int)
     w = df[WEIGHT_COL]
 
-    log.info("\n🚀 Training final production model on ALL 4 seasons...")
-    model = train_catboost(X, y, w)
+    # ✅ CHANGED — cap at Fold 2's best iteration instead of running all 1000
+    # Fold 2 best = 259, add 10% buffer for full dataset (more data = slightly more trees needed)
+    best_iter = int(fold_metrics[-1].get("best_iteration", 259) * 1.10)
+    best_iter = max(100, min(best_iter, 600))  # clamp between 100–600
+    log.info(f"\n🚀 Training final production model — capped at {best_iter} iterations...")
 
+    # ✅ CHANGED — build params with capped iterations, no early stopping (no val set)
+    final_params = {**CATBOOST_PARAMS}
+    final_params["iterations"] = best_iter
+    final_params.pop("early_stopping_rounds", None)
+
+    model = CatBoostClassifier(**final_params)
+    model.fit(X, y, sample_weight=w)
+
+    # ── Everything below this line is UNCHANGED ────────────────────────────
     # Use Fold 2 metrics as the gate check for production save
     metrics = fold_metrics[-1]
     passed, failures = gate_check(metrics)
@@ -310,7 +375,7 @@ def train_final_model(df: pd.DataFrame, dry_run: bool, fold_metrics: list) -> Ca
     meta = {
         "trained_at":      datetime.now(timezone.utc).isoformat(),
         "train_seasons":   [2020, 2021, 2022, 2023, 2024],   # ✅ add 2020
-        "leagues":         ["EPL", "LIGA", "UCL", "UEL"],
+        "leagues":         ["EPL", "LIGA", "UCL", "UEL", "BUN", "SA"],
         "feature_cols":    FEATURE_COLS,
         "cat_features":    CAT_FEATURES,
         "metrics_fold1":   fold_metrics[0],
@@ -362,7 +427,7 @@ def train_final_model(df: pd.DataFrame, dry_run: bool, fold_metrics: list) -> Ca
 def main(dry_run: bool = False):
     print("\n🚀 Layer 4 — Multi-League Model Training Pipeline (v2)")
     print("=" * 60)
-    print(f"   Leagues  : EPL, La Liga, UCL, UEL")
+    print(f"   Leagues  : EPL, La Liga, UCL, UEL, Bundesliga, Serie A")
     print(f"   Seasons  : 2021-22 → 2024-25 (4 seasons)")
     print(f"   Model    : CatBoostClassifier + league_key categorical")
     print(f"   Mode     : {'DRY RUN (no model save)' if dry_run else 'LIVE'}")

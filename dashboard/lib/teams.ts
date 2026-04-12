@@ -1,33 +1,19 @@
-// lib/teams.ts
-export const TEAMS: Record<number, { name: string; short: string }> = {
-  33:  { name: 'Manchester United', short: 'MAN UTD' },
-  34:  { name: 'Newcastle United',  short: 'NEWCASTLE' },
-  40:  { name: 'Liverpool',         short: 'LIVERPOOL' },
-  41:  { name: 'Southampton',       short: 'SOUTHAMPTON' },
-  42:  { name: 'Arsenal',           short: 'ARSENAL' },
-  45:  { name: 'Everton',           short: 'EVERTON' },
-  46:  { name: 'Leicester City',    short: 'LEICESTER' },
-  47:  { name: 'Tottenham',         short: 'SPURS' },
-  48:  { name: 'West Ham',          short: 'WEST HAM' },
-  49:  { name: 'Chelsea',           short: 'CHELSEA' },
-  50:  { name: 'Manchester City',   short: 'MAN CITY' },
-  51:  { name: 'Brighton',          short: 'BRIGHTON' },
-  52:  { name: 'Crystal Palace',    short: 'CRYSTAL P' },
-  55:  { name: 'Brentford',         short: 'BRENTFORD' },
-  57:  { name: 'Ipswich Town',      short: 'IPSWICH' },
-  62:  { name: 'Sheffield United',  short: 'SHEFF UTD' },
-  63:  { name: 'Leeds United',      short: 'LEEDS' },
-  65:  { name: 'Nottm Forest',      short: 'FOREST' },
-  66:  { name: 'Aston Villa',       short: 'ASTON VILLA' },
-  67:  { name: 'Fulham',            short: 'FULHAM' },
-  71:  { name: 'Wolverhampton',     short: 'WOLVES' },
-  73:  { name: 'Bournemouth',       short: 'BOURNEMOUTH' },
+const TEAM_NAMES: Record<number, string> = {
+  // EPL
+  33: 'Manchester United', 34: 'Newcastle', 40: 'Liverpool',
+  42: 'Arsenal', 47: 'Tottenham', 49: 'Chelsea', 50: 'Manchester City',
+  51: 'Brighton', 52: 'Crystal Palace', 55: 'Brentford',
+  57: 'Ipswich', 62: 'Sheffield Utd', 63: 'Leeds', 65: 'Nottm Forest',
+  66: 'Aston Villa', 67: 'Newcastle', 71: 'West Ham',
+  // La Liga
+  529: 'Barcelona', 530: 'Atletico Madrid', 531: 'Athletic Club',
+  532: 'Valencia', 533: 'Villarreal', 536: 'Sevilla', 541: 'Real Madrid',
+  // UCL / UEL
+  157: 'Bayern Munich', 165: 'Borussia Dortmund', 489: 'AC Milan',
+  492: 'Napoli', 496: 'Juventus', 505: 'Inter Milan',
 }
 
-export function getTeamName(id: number): string {
-  return TEAMS[id]?.name ?? `Team ${id}`
-}
-
-export function getTeamShort(id: number): string {
-  return TEAMS[id]?.short ?? `#${id}`
+export function getTeamName(id: number | string): string {
+  const n = Number(id)
+  return TEAM_NAMES[n] ?? `Team ${id}`
 }

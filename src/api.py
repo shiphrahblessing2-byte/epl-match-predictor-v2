@@ -157,6 +157,8 @@ def predict_batch_endpoint(req: BatchRequest):
 
 
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 @app.get("/fixtures", tags=["Fixtures"])
 def all_fixtures(
     league:      str = None,
@@ -165,14 +167,13 @@ def all_fixtures(
 ):
     """
     Return fixtures across all leagues (EPL, UCL, UEL, La Liga).
-    EPL upcoming (NS) fixtures include ML predictions.
+    Upcoming (NS) fixtures include ML predictions — run in parallel.
     Past results include final scores.
     """
     try:
         now       = datetime.now(timezone.utc)
         date_from = (now - timedelta(weeks=weeks_back)).isoformat()
         date_to   = (now + timedelta(weeks=weeks_ahead)).isoformat()
-
 
         query = (
             db.table("matches")
@@ -184,37 +185,67 @@ def all_fixtures(
         if league:
             query = query.eq("league_key", league.upper())
 
-
         rows = query.execute().data or []
 
+        # ── Split upcoming vs finished ──────────────────────────────────
+        PREDICT_LEAGUES = {"EPL", "LIGA", "UCL", "UEL"}
 
-        for row in rows:
-            if row.get("league_key") in ("EPL", "LIGA", "UCL", "UEL") and row.get("status_short") == "NS":
-                try:
-                    pred = predict_match(
-                        row["home_team_id"],
-                        row["away_team_id"],
-                        db,
-                        datetime.fromisoformat(
-                            str(row["match_date"]).replace("Z", "+00:00")
-                        ),
-                        league_key=row.get("league_key", "EPL"), 
-                    )
-                    row["prediction"] = pred
-                except Exception as pe:
-                    row["prediction"] = None
-                    log.warning(f"Prediction failed for {row.get('fixture_id')}: {pe}")
-            else:
+        upcoming = [
+            r for r in rows
+            if r.get("status_short") == "NS"
+            and r.get("league_key") in PREDICT_LEAGUES
+        ]
+        no_pred = [
+            r for r in rows
+            if not (r.get("status_short") == "NS"
+                    and r.get("league_key") in PREDICT_LEAGUES)
+        ]
+
+        # ── Mark finished fixtures immediately (no prediction needed) ───
+        for row in no_pred:
+            row["prediction"] = None
+
+        # ── Predict upcoming fixtures in parallel ───────────────────────
+        def run_prediction(row: dict) -> dict:
+            try:
+                pred = predict_match(
+                    row["home_team_id"],
+                    row["away_team_id"],
+                    db,
+                    datetime.fromisoformat(
+                        str(row["match_date"]).replace("Z", "+00:00")
+                    ),
+                    league_key=row.get("league_key", "EPL"),
+                )
+                row["prediction"] = pred
+            except Exception as pe:
                 row["prediction"] = None
+                log.warning(f"Prediction failed for {row.get('fixture_id')}: {pe}")
+            return row
 
+        predicted = []
+        if upcoming:
+            # max_workers=8 — safe for Supabase connection limits
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = {executor.submit(run_prediction, row): row for row in upcoming}
+                for future in as_completed(futures):
+                    try:
+                        predicted.append(future.result())
+                    except Exception as e:
+                        row = futures[future]
+                        row["prediction"] = None
+                        predicted.append(row)
+                        log.warning(f"Thread failed for fixture: {e}")
 
-        return {"count": len(rows), "fixtures": rows}
+        # ── Re-sort by match_date (parallel breaks ordering) ───────────
+        all_rows = predicted + no_pred
+        all_rows.sort(key=lambda r: r.get("match_date") or "")
 
+        return {"count": len(all_rows), "fixtures": all_rows}
 
     except Exception as e:
         log.error(f"/fixtures error: {e}")
         raise HTTPException(500, str(e))
-
 
 
 @app.get("/upcoming", tags=["Prediction"])
@@ -327,3 +358,15 @@ def rolling_accuracy():
         }
     except Exception as e:
         raise HTTPException(500, str(e))
+    
+
+@app.get("/model-metrics", tags=["Evaluation"])
+def model_metrics():
+    """Return training evaluation metrics from the latest model run."""
+    report_path = Path(__file__).resolve().parent.parent / "reports" / "evaluation_summary.json"
+    try:
+        with open(report_path) as f:
+            data = json.load(f)
+        return data
+    except FileNotFoundError:
+        raise HTTPException(404, "No evaluation report found — run train_model.py first")

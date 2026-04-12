@@ -1,26 +1,32 @@
 'use client'
-
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 
 export default function RefreshButton() {
   const router = useRouter()
-  const [loading, setLoading] = useState(false)
+  const [spin, setSpin] = useState(false)
 
-  const handleRefresh = () => {
-    setLoading(true)
+  const refresh = () => {
+    setSpin(true)
     router.refresh()
-    setTimeout(() => setLoading(false), 1500)
+    setTimeout(() => setSpin(false), 1200)
   }
 
   return (
     <button
-      onClick={handleRefresh}
-      disabled={loading}
-      className="flex items-center gap-2 text-sm px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-50"
+      onClick={refresh}
+      aria-label="Refresh fixtures"
+      className="p-2 rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition"
     >
-      <span className={loading ? 'animate-spin' : ''}>🔄</span>
-      {loading ? 'Refreshing...' : 'Refresh'}
+      <svg
+        width="16" height="16" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" strokeWidth="2"
+        className={spin ? 'animate-spin' : ''}
+      >
+        <path d="M23 4v6h-6"/>
+        <path d="M1 20v-6h6"/>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+      </svg>
     </button>
   )
 }

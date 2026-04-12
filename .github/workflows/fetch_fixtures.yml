@@ -3,8 +3,10 @@ name: Fetch Daily Fixtures
 
 on:
   schedule:
-    - cron: '0 6 * * *'   # runs every day at 6AM UTC
-  workflow_dispatch:        # allows manual trigger from GitHub UI
+    - cron: '0 6 * * *'    # 6AM UTC daily
+    - cron: '0 12 * * *'   # ✅ ADD — 12PM UTC (matchdays need more frequency)
+    - cron: '0 18 * * *'   # ✅ ADD — 6PM UTC (pre-evening kickoffs)
+  workflow_dispatch:
 
 jobs:
   fetch:
@@ -14,8 +16,26 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
+
       - run: pip install -r requirements.txt
-      - run: python src/fetch_upcoming_espn.py
+
+      # ── Your existing step (keep as-is) ──────────────────────────────
+      - name: Fetch upcoming fixtures
+        run: python src/fetch_upcoming_espn.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+      # ✅ ADD — live scores, injuries, live fixtures
+      - name: Run live data pipeline
+        run: python src/live_data_pipeline.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+
+      # ✅ ADD — bust Vercel cache so frontend shows fresh data immediately
+      - name: Revalidate Vercel frontend
+        run: |
+          curl -s -o /dev/null -w "Vercel revalidate: %{http_code}\n" \
+            -X GET "https://epl-prediction.vercel.app/api/revalidate"

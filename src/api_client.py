@@ -47,6 +47,8 @@ ESPN_LEAGUES = {
     "LIGA": {"slug": "esp.1",         "name": "La Liga"},
     "UCL":  {"slug": "uefa.champions","name": "Champions League"},
     "UEL":  {"slug": "uefa.europa",   "name": "Europa League"},
+    "BUN":  {"slug": "ger.1",     "name": "Bundesliga",  "flag": "🇩🇪"},  # ← ADD
+    "SA":   {"slug": "ita.1",     "name": "Serie A",     "flag": "🇮🇹"},  # ← ADD
 }
 
 # Season date ranges — ESPN uses year the season STARTS (2024 = 2024/25)
@@ -184,6 +186,7 @@ def parse_espn_event(event: dict, league_key: str, season: int) -> dict | None:
             "league_key":   league_key,
             "league_round": event.get("week", {}).get("number") if isinstance(
                             event.get("week"), dict) else None,
+            "espn_event_id": event["id"],
             "home_team_id": int(home["team"]["id"]),
             "away_team_id": int(away["team"]["id"]),
             "home_goals":   home_goals,
